@@ -31,7 +31,10 @@ const messageBody = z.object({
   content: z.string().trim().min(1).max(50_000),
 });
 const credentialsBody = z.object({
-  username: z.string().trim().min(3).max(40).regex(/^[a-zA-Z0-9_.-]+$/),
+  username: z.string().trim()
+    .min(3, "Username must contain at least 3 characters.")
+    .max(40, "Username must contain at most 40 characters.")
+    .regex(/^[a-zA-Z0-9_.-]+$/, "Username may contain only letters, numbers, underscores, dots and hyphens. Use fyp_owner or profile_owner; spaces are not allowed."),
   password: z.string().min(1).max(256),
 });
 const userIdParams = z.object({ id: z.string().uuid() });

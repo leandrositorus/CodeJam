@@ -22,7 +22,9 @@ export class AuthorizationBridge {
 
   async start(): Promise<void> {
     if (this.config.runtimeProvider !== "container") await rm(this.socketPath, { force: true });
-    this.server = net.createServer((socket) => this.handleConnection(socket));
+    // The helper half-closes after sending its request. Keep the response side
+    // open while asynchronous policy evaluation and summarization complete.
+    this.server = net.createServer({ allowHalfOpen: true }, (socket) => this.handleConnection(socket));
     const listenOptions = this.config.runtimeProvider === "container"
       ? { port: 0, host: this.config.nodeEnv === "test" ? "127.0.0.1" : "0.0.0.0" }
       : { path: this.socketPath };

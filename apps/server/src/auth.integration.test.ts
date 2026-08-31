@@ -47,6 +47,38 @@ function sessionCookie(response: { headers: Record<string, string | string[] | u
 }
 
 describe("password authentication", () => {
+  it("rejects display names as usernames without crashing and accepts a corrected login", async () => {
+    const { app, store } = await makeApp();
+    try {
+      const login = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "admin" } });
+      const cookie = sessionCookie(login);
+      for (const username of ["FYP Owner", "Maya (FYP Owner)", "ab", "a".repeat(41)]) {
+        const response = await app.inject({
+          method: "POST", url: "/api/users", headers: { cookie },
+          payload: { username, password: "demo-test-password" },
+        });
+        expect(response.statusCode).toBe(400);
+        expect(response.json().details[0].message).toContain("Username");
+        expect(response.body).not.toContain("demo-test-password");
+      }
+      expect(store.snapshot().users).toHaveLength(1);
+      expect((await app.inject({ method: "GET", url: "/api/users", headers: { cookie } })).statusCode).toBe(200);
+      const created = await app.inject({
+        method: "POST", url: "/api/users", headers: { cookie },
+        payload: { username: " FYP_Owner ", password: "demo-test-password" },
+      });
+      expect(created.statusCode).toBe(201);
+      expect(created.json().user.username).toBe("fyp_owner");
+      const signedIn = await app.inject({
+        method: "POST", url: "/api/auth/login",
+        payload: { username: "fyp_owner", password: "demo-test-password" },
+      });
+      expect(signedIn.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("uses the explicit cookie security setting", async () => {
     const insecure = await makeApp();
     const insecureLogin = await insecure.app.inject({

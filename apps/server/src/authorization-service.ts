@@ -15,7 +15,7 @@ type ResourceCreateInput = Pick<ProtectedResource, "category" | "label" | "sourc
 type ResourceUpdateInput = { category?: string | undefined; label?: string | undefined; sourceAgentId?: string | null | undefined; description?: string | undefined; sharingEligible?: boolean | undefined; offerDescriptor?: string | undefined };
 
 export class AuthorizationService {
-  constructor(private readonly config: AppConfig, private readonly store: JsonStore, private readonly sharingEvaluator: SharingEvaluator = new ArkSharingEvaluator(config), private readonly summarizer = new ChatResourceSummarizer(config)) {}
+  constructor(private readonly config: AppConfig, private readonly store: JsonStore, private readonly sharingEvaluator: SharingEvaluator = new ArkSharingEvaluator(config), private readonly summarizer: Pick<ChatResourceSummarizer, "summarize"> = new ChatResourceSummarizer(config)) {}
 
   listResources(actor: AuthenticatedActor): ResourceDescriptor[] {
     return this.store.snapshot().protectedResources.filter((item) => item.ownerId === actor.id).map((item) => this.descriptor(item));
@@ -84,7 +84,7 @@ export class AuthorizationService {
   }
 
   policy(actor: AuthenticatedActor): UserAuthorizationPolicy | null {
-    return this.store.snapshot().authorizationPolicies.filter((item) => item.ownerId === actor.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
+    return this.store.snapshot().authorizationPolicies.filter((item) => item.ownerId === actor.id).reverse().sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
   }
 
   async revokePolicy(actor: AuthenticatedActor, id: string): Promise<UserAuthorizationPolicy> {
@@ -256,10 +256,10 @@ export class AuthorizationService {
     else if (action !== "read") reasonCode = "WRITE_NOT_SUPPORTED";
     else if (!resource.sharingEligible) reasonCode = "SHARING_DISABLED";
     else {
-      policy = initial.authorizationPolicies.filter((item) => item.ownerId === resource.ownerId).sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+      policy = initial.authorizationPolicies.filter((item) => item.ownerId === resource.ownerId).reverse().sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
       if (!policy || policy.status !== "active") reasonCode = "NO_SHARING_POLICY";
       else {
-        const decision = await this.sharingEvaluator.decide({ policyText: policy.sourceText, runPrompt: run.prompt, agentName: agent.name, resourceCategory: resource.category, offerDescription: resource.offerDescriptor });
+        const decision = await this.sharingEvaluator.decide({ policyText: policy.sourceText, runPrompt: run.prompt, agentName: agent.name, requester: { userId: agent.ownerId, username: initial.users.find((item) => item.id === agent.ownerId)?.username ?? "", agentId: agent.id }, resourceOwner: { userId: resource.ownerId, username: initial.users.find((item) => item.id === resource.ownerId)?.username ?? "" }, resourceLabel: resource.label, resourceCategory: resource.category, offerDescription: resource.offerDescriptor });
         if (!decision) reasonCode = "SHARING_DECISION_UNAVAILABLE";
         else { allowed = decision.allowed; reasonCode = decision.allowed ? "ALLOW" : "SHARING_POLICY_DENIED"; }
       }
@@ -279,7 +279,19 @@ export class AuthorizationService {
     if (!authorization.allowed || !authorization.resource?.sourceAgentId) return { allowed: false, reasonCode: authorization.reasonCode };
     const db = this.store.snapshot();
     const messages = db.messages.filter((message) => message.agentId === authorization.resource!.sourceAgentId && message.role === "assistant").sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 12).map((message) => message.content).reverse();
+    const policyBeforeSummary = db.authorizationPolicies.filter((item) => item.ownerId === authorization.resource!.ownerId && item.status === "active").map((item) => item.id).join(",");
     const summary = await this.summarizer.summarize({ category: authorization.resource.category, description: authorization.resource.description, messages });
+    const current = this.store.snapshot();
+    const currentRun = current.runs.find((item) => item.id === runId);
+    const currentAgent = current.agents.find((item) => item.id === agentId);
+    const currentResource = current.protectedResources.find((item) => item.id === resourceId);
+    const currentPolicy = current.authorizationPolicies.filter((item) => item.ownerId === authorization.resource!.ownerId && item.status === "active").map((item) => item.id).join(",");
+    if (currentRun?.status !== "running" || currentRun.agentId !== agentId || !currentAgent || currentAgent.authorizationStatus !== "active" ||
+      currentRun.initiatingUserId !== currentAgent.ownerId || JSON.stringify(currentResource) !== JSON.stringify(authorization.resource) ||
+      !current.agents.some((item) => item.id === currentResource?.sourceAgentId && item.ownerId === currentResource.ownerId) ||
+      (currentResource?.ownerId !== currentAgent.ownerId && currentPolicy !== policyBeforeSummary)) {
+      return { allowed: false, reasonCode: "AUTHORIZATION_STATE_CHANGED" };
+    }
     return summary.summary ? { allowed: true, reasonCode: "ALLOW", resource: { id: authorization.resource.id, label: authorization.resource.label, category: authorization.resource.category, summary: summary.summary } } : { allowed: false, reasonCode: summary.reasonCode };
   }
 
