@@ -22,6 +22,47 @@ async function setup(name: string, env: Record<string, string> = {}) {
 }
 
 describe("AuthorizationService", () => {
+  it.each([["fyp_user", "profile_user"], ["profile_user", "fyp_user"]])("shares from %s to %s only while permitted", async (ownerName, requesterName) => {
+    const { config, store, agents } = await setup("launchpad-demo-", { CROSS_OWNER_SHARING_ENABLED: "true", RUNTIME_PROVIDER: "container" });
+    const admin = (await agents.login("admin", "admin")).user;
+    const owner = await agents.createUser(admin, ownerName, "demo-password");
+    const requester = await agents.createUser(admin, requesterName, "demo-password");
+    const source = await agents.createAgent(owner, { name: "Source" });
+    const target = await agents.createAgent(requester, { name: "Reader" });
+    await store.mutate((db) => {
+      db.runs.push({ id: "demo-run", agentId: target.id, initiatingUserId: requester.id, status: "running", prompt: "Read the approved summary", output: null, error: null, usage: null, startedAt: null, completedAt: null, createdAt: new Date().toISOString() });
+      db.messages.push({ id: "source-message", agentId: source.id, runId: "source-run", role: "assistant", content: "Approved city: Singapore", createdAt: new Date().toISOString() });
+    });
+    let decision: boolean | null = true;
+    let duringSummary: (() => Promise<unknown>) | undefined;
+    const authorization = new AuthorizationService(config, store, { decide: async (input) => {
+      expect(input.requester).toEqual({ userId: requester.id, username: requesterName, agentId: target.id });
+      expect(input.resourceOwner.username).toBe(ownerName);
+      return decision === null ? null : { allowed: decision, rationale: "Test policy decision" };
+    } }, { summarize: async (input) => {
+      expect(input.messages).toEqual(["Approved city: Singapore"]);
+      await duringSummary?.();
+      return { summary: "Singapore", reasonCode: "ALLOW" };
+    } });
+    const resource = await authorization.createResource(owner, { category: "report", label: "Approved summary", sourceAgentId: source.id, description: "City only", sharingEligible: false });
+    expect(authorization.runtimeResourceDirectory(target.id)).toEqual([]);
+    expect(await authorization.read("demo-run", target.id, resource.id)).toMatchObject({ allowed: false, reasonCode: "SHARING_DISABLED" });
+    await authorization.updateResource(owner, resource.id, { sharingEligible: true, offerDescriptor: "Approved city summary" });
+    expect(await authorization.read("demo-run", target.id, resource.id)).toMatchObject({ allowed: false, reasonCode: "NO_SHARING_POLICY" });
+    const policy = await authorization.submitStoryPolicy(owner, "Allow approved summary reads");
+    expect(authorization.runtimeResourceDirectory(target.id)).toEqual([expect.objectContaining({ id: resource.id })]);
+    expect(await authorization.read("demo-run", target.id, resource.id)).toMatchObject({ allowed: true, resource: { summary: "Singapore" } });
+    decision = false;
+    expect(await authorization.read("demo-run", target.id, resource.id)).toMatchObject({ allowed: false, reasonCode: "SHARING_POLICY_DENIED" });
+    decision = null;
+    expect(await authorization.read("demo-run", target.id, resource.id)).toMatchObject({ allowed: false, reasonCode: "SHARING_DECISION_UNAVAILABLE" });
+    decision = true;
+    expect(await authorization.evaluate("demo-run", target.id, "write", resource.id)).toMatchObject({ allowed: false, reasonCode: "WRITE_NOT_SUPPORTED" });
+    duringSummary = () => authorization.revokePolicy(owner, policy.id);
+    expect(await authorization.read("demo-run", target.id, resource.id)).toMatchObject({ allowed: false, reasonCode: "AUTHORIZATION_STATE_CHANGED" });
+    expect(await authorization.read("demo-run", target.id, resource.id)).toMatchObject({ allowed: false, reasonCode: "NO_SHARING_POLICY" });
+  });
+
   it("accepts a migrated non-UUID Agent ID as a resource source", async () => {
     const { config, store, agents } = await setup("launchpad-legacy-resource-");
     const admin = (await agents.login("admin", "admin")).user;

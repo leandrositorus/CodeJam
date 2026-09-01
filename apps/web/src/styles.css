@@ -1006,6 +1006,47 @@ textarea:focus {
   font-size: 11px;
 }
 
+/* Resource cards are not sidebar Agent cards: no avatar/status columns. */
+.agent-card.resource-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  cursor: default;
+  background: #f8f7f3;
+  border-color: #dedbd3;
+}
+
+.resource-card .agent-card-copy strong,
+.resource-card .agent-card-copy span {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  color: #34342e;
+  font-size: 13px;
+}
+
+.resource-card .resource-id {
+  font-family: monospace;
+  user-select: text;
+}
+
+.authorization-evidence {
+  display: grid;
+  gap: 8px;
+}
+
+.run-error.authorization-allowed {
+  border-left-color: #23834c;
+  background: #edf8ef;
+  color: #185c35;
+}
+
+@media (max-width: 600px) {
+  .agent-card.resource-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .composer {
   margin: 0;
   border-top: 1px solid #e1dfd8;

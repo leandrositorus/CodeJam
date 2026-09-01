@@ -26,9 +26,19 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     headers,
     credentials: "same-origin",
   });
-  const data = (await response.json().catch(() => ({}))) as T & { error?: string };
+  const data = (await response.json().catch(() => ({}))) as T & { error?: string; details?: unknown };
   if (!response.ok) {
-    throw new ApiError(data.error ?? "Request failed", response.status);
+    const validationMessages = response.status === 400 && Array.isArray(data.details)
+      ? data.details.flatMap((issue: unknown) => {
+          if (!issue || typeof issue !== "object") return [];
+          const message = (issue as { message?: unknown }).message;
+          return typeof message === "string" ? [message] : [];
+        })
+      : [];
+    throw new ApiError(
+      validationMessages.length ? [...new Set(validationMessages)].join(" ") : data.error ?? "Request failed",
+      response.status,
+    );
   }
   return data;
 }
